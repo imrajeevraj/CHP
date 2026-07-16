@@ -1,36 +1,37 @@
 #include <bits/stdc++.h>
 using namespace std;
 
-int main()
-{
-	int t;
-	cin >> t; 
-	while (t--)
-	{
-		int n;
-		cin >> n; 
-		long long sum = 0;
-        for (int i = 0; i < n ; i++){
-            int m;
-            cin >> m ;
-            if()
+int main() {
+    ios::sync_with_stdio(false);
+    cin.tie(nullptr);
+
+    int T;
+    cin >> T;
+
+    while (T--) {
+        int n;
+        cin >> n;
+
+        vector<int> a(n);
+
+        for (int i = 0; i < n; i++)
+            cin >> a[i];
+
+        for (int i = 0; i < n; i++) {
+            for (int j = i + 1; j < n; j++) {
+                if (a[j] > a[i]) {
+                    a[j] = a[i];
+                    break;
+                }
+            }
         }
-		while (num >= 0) 
-		{
-			ans.push_back(num);
-			num--;
-		}
-		num = pow(2, msb); 
-		while (num <= n) 
-		{
-			ans.push_back(num);
-			num++;
-		}
 
-		for (auto it : ans) 
-			cout << it << " ";
-		cout << endl;
-	}
+        long long ans = 0;
+        for (int x : a)
+            ans += x;
+
+        cout << ans << '\n';
+    }
+
+    return 0;
 }
-
-
