@@ -1,38 +1,26 @@
-#include <bits/stdc++.h>
+#include <iostream>
 using namespace std;
-
-bool good(long long x) {
-    bool vis[10] = {};
-    int cnt = 0;
-
-    while (x) {
-        int d = x % 10;
-        if (!vis[d]) {
-            vis[d] = true;
-            cnt++;
-            if (cnt > 2) return false;
-        }
-        x /= 10;
-    }
-    return true;
-}
 
 int main() {
     ios::sync_with_stdio(false);
-    cin.tie(nullptr);
+    cin.tie(NULL);
 
     int t;
     cin >> t;
 
     while (t--) {
-        long long x;
+        int x;
         cin >> x;
 
-        for (int y = 2; y <= 99; y++) {
-            if (good(y) && good(x * 1LL * y)) {
-                cout << y << '\n';
-                break;
-            }
+        int y = 1;
+
+        while (x > 0) {
+            y *= 10;
+            x /= 10;
         }
+
+        cout << y + 1 << "\n";
     }
+
+    return 0;
 }
