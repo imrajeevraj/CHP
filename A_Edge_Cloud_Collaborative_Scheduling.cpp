@@ -1,994 +1,469 @@
 #include <bits/stdc++.h>
 using namespace std;
 
-double estimate_proc_time(int batch_size, int task_id,
-                          const vector<vector<double> >& task_table) {
-    if (task_id >= (int)task_table.size())
-        return 0.1;
-
-    const vector<double>& row = task_table[task_id];
-
-    if (batch_size >= (int)row.size())
-        return row.back();
-
-    return row[(int)batch_size];
-}
-
 struct RequestState {
     string stage;
-    int computer;
+    int c;
     int Lin;
-    int task_id;
 };
 
+// custom hash for pair
+struct pair_hash {
+    template <class T1, class T2>
+    std::size_t operator () (const std::pair<T1,T2> &p) const {
+        auto h1 = std::hash<T1>{}(p.first);
+        auto h2 = std::hash<T2>{}(p.second);
+        return h1 ^ (h2 << 1);
+    }
+};
+
+using MinHeap = priority_queue<int, vector<int>, greater<int>>;
+
 int main() {
-    ios::sync_with_stdio(false);
+    ios_base::sync_with_stdio(false);
     cin.tie(NULL);
 
-    // ------------------------------------------------------------
-    // First line
-    // K S SLO1 SLO2 tp_ub tp_base
-    // ------------------------------------------------------------
-
+    string line;
+    if (!getline(cin, line)) return 0;
+    stringstream ss1(line);
     int K;
-    double S, SLO1, SLO2, tp_ub, tp_base;
+    double S, latency_in_ms, bandwidth_gbps, bytes_per_token;
+    int num_layers;
+    ss1 >> K >> S >> latency_in_ms >> bandwidth_gbps >> bytes_per_token >> num_layers;
 
-    cin >> K >> S >> SLO1 >> SLO2 >> tp_ub >> tp_base;
+    if (!getline(cin, line)) return 0;
+    stringstream ss2(line);
+    double SLO1, SLO2, tp_ub, tp_base, dist_base, w_tp, w_c;
+    ss2 >> SLO1 >> SLO2 >> tp_ub >> tp_base >> dist_base >> w_tp >> w_c;
 
-    // ------------------------------------------------------------
-    // Second line
-    // dist_base tp_th
-    // ------------------------------------------------------------
-
-    double dist_base, tp_th;
-
-    cin >> dist_base >> tp_th;
-
-    // ------------------------------------------------------------
-    // Number of tasks
-    // ------------------------------------------------------------
-
+    if (!getline(cin, line)) return 0;
+    stringstream ss3(line);
     int N;
-    cin >> N;
+    ss3 >> N;
 
-    vector<vector<double> > task_table;
-
-    for (int i = 0; i < N; i++) {
-        vector<double> row;
-        double value;
-
-        string line;
-        getline(cin >> ws, line);
-
+    vector<vector<double>> task_table(N);
+    for (int i = 0; i < N; ++i) {
+        getline(cin, line);
         stringstream ss(line);
-
-        while (ss >> value) {
-            row.push_back(value);
+        double val;
+        while (ss >> val) {
+            task_table[i].push_back(val);
         }
-
-        task_table.push_back(row);
     }
 
-    // ------------------------------------------------------------
-    // Request state
-    // ------------------------------------------------------------
-
-    map<int, RequestState> request_state;
-
-    map<int, double> request_arrival_time;
-
-    map<int, double> request_assigned_time;
-
-    // ------------------------------------------------------------
-    // Computer state
-    // ------------------------------------------------------------
+    unordered_map<int, RequestState> request_state;
+    unordered_map<int, double> request_arrival_time;
+    unordered_map<int, int> output_iter;
 
     vector<bool> computer_free(K, true);
-
     vector<int> computer_request_count(K, 0);
-
     bool local_free = true;
 
-    // ------------------------------------------------------------
-    // Input/output readiness
-    // ------------------------------------------------------------
+    unordered_set<int> input_up_ready;
+    unordered_set<int> input_down_ready;
+    unordered_set<pair<int, int>, pair_hash> output_up_ready;
+    unordered_set<pair<int, int>, pair_hash> output_down_ready;
 
-    set<int> input_up_ready;
+    MinHeap p_pre_heap;
+    vector<MinHeap> p_proc_heaps(K);
+    vector<MinHeap> d_pre_heaps(K);
+    vector<MinHeap> d_proc_heaps(K);
+    MinHeap d_pre_global;
+    MinHeap d_post_heap;
 
-    set<int> input_down_ready;
+    auto valid = [&](int rid, const string& stage) {
+        auto it = request_state.find(rid);
+        return it != request_state.end() && it->second.stage == stage;
+    };
 
-    map<int, int> output_iter;
+    auto clean_heap = [&](MinHeap& heap, const string& stage) {
+        while (!heap.empty()) {
+            int rid = heap.top();
+            if (valid(rid, stage)) {
+                break;
+            }
+            heap.pop();
+        }
+    };
 
-    map<pair<int, int>, bool> output_up_ready;
+    auto peek_valid = [&](MinHeap& heap, const string& stage, int limit) {
+        vector<int> result;
+        while (!heap.empty() && result.size() < (size_t)limit) {
+            int rid = heap.top();
+            heap.pop();
+            if (valid(rid, stage)) {
+                result.push_back(rid);
+            }
+        }
+        for (int rid : result) {
+            heap.push(rid);
+        }
+        return result;
+    };
 
-    map<pair<int, int>, bool> output_down_ready;
+    auto add_p_proc = [&](int rid) {
+        auto it = request_state.find(rid);
+        if (it != request_state.end() && it->second.stage == "P_PROC") {
+            p_proc_heaps[it->second.c].push(rid);
+        }
+    };
 
-    // Same as:
-    // num_layers = int(params1[5])
-    //
-    // params1[5] == tp_base
-    // ------------------------------------------------------------
+    auto add_d_pre = [&](int rid) {
+        auto it = request_state.find(rid);
+        if (it != request_state.end() && it->second.stage == "D_PRE") {
+            int c = it->second.c;
+            if (c >= 0 && c < K) d_pre_heaps[c].push(rid);
+            d_pre_global.push(rid);
+        }
+    };
 
-    int num_layers = (int)tp_base;
+    auto add_d_proc = [&](int rid) {
+        auto it = request_state.find(rid);
+        if (it != request_state.end() && it->second.stage == "D_PROC_W") {
+            int c = it->second.c;
+            if (output_up_ready.count({rid, output_iter[rid]})) {
+                if (c >= 0 && c < K) d_proc_heaps[c].push(rid);
+            }
+        }
+    };
 
-    // ============================================================
-    // MAIN EVENT LOOP
-    // ============================================================
+    auto add_d_post = [&](int rid) {
+        auto it = request_state.find(rid);
+        if (it != request_state.end() && it->second.stage == "D_POST_W") {
+            if (output_down_ready.count({rid, output_iter[rid]})) {
+                d_post_heap.push(rid);
+            }
+        }
+    };
 
     while (true) {
+        if (!getline(cin, line)) break;
+        
+        // Trim whitespace/carriage returns
+        size_t end = line.find_last_not_of(" \r\n\t");
+        if (end != string::npos) {
+            line = line.substr(0, end + 1);
+        } else {
+            line = "";
+        }
 
-        string timestamp_line;
+        if (line.empty()) continue; // skip blank lines if any, to match strip() behavior when robust
+        if (line == "END") break;
 
-        cin >> timestamp_line;
-
-        if (timestamp_line == "END")
-            break;
-
-        double timestamp = atof(timestamp_line.c_str());
-
+        double timestamp = stod(line);
+        
+        if (!getline(cin, line)) break;
+        stringstream ss_num(line);
         int num_events;
-        cin >> num_events;
+        ss_num >> num_events;
 
-        set<int> assigned_this_frame;
+
+        unordered_set<int> assigned_this_frame;
+
+        for (int i = 0; i < num_events; ++i) {
+            getline(cin, line);
+            stringstream ss(line);
+            string event_type;
+            ss >> event_type;
+
+            if (event_type == "ARR") {
+                int rid, Lin;
+                ss >> rid >> Lin;
+                request_state[rid] = {"P_PRE", -1, Lin};
+                request_arrival_time[rid] = timestamp;
+                output_iter[rid] = 0;
+                p_pre_heap.push(rid);
+            } else if (event_type == "TDN") {
+                string server;
+                ss >> server;
+                if (server == "E") {
+                    local_free = true;
+                } else {
+                    try {
+                        int comp_id;
+                        if (server[0] == 'C') {
+                            comp_id = stoi(server.substr(1));
+                        } else {
+                            comp_id = stoi(server);
+                        }
+                        if (comp_id >= 0 && comp_id < K) {
+                            computer_free[comp_id] = true;
+                        }
+                    } catch (...) {}
+                }
+            } else if (event_type == "XDN") {
+                string direction;
+                ss >> direction;
+                
+                vector<string> tokens;
+                string t;
+                while (ss >> t) {
+                    tokens.push_back(t);
+                }
+                
+                if (tokens.size() < 5) continue;
+                
+                string phase = tokens[2];
+                vector<int> rids;
+                for (size_t j = 4; j < tokens.size(); ++j) {
+                    rids.push_back(stoi(tokens[j]));
+                }
+
+                if (direction == "UP") {
+                    if (phase == "PRE") {
+                        for (int rid : rids) {
+                            input_up_ready.insert(rid);
+                            add_p_proc(rid);
+                        }
+                    } else if (phase == "DEC") {
+                        for (int rid : rids) {
+                            output_up_ready.insert({rid, output_iter[rid]});
+                            add_d_proc(rid);
+                        }
+                    }
+                } else if (direction == "DOWN") {
+                    if (phase == "PRE") {
+                        for (int rid : rids) {
+                            input_down_ready.insert(rid);
+                        }
+                    } else if (phase == "DEC") {
+                        for (int rid : rids) {
+                            output_down_ready.insert({rid, output_iter[rid]});
+                            add_d_post(rid);
+                        }
+                    }
+                }
+            } else if (event_type == "FIN") {
+                int rid;
+                ss >> rid;
+                auto it = request_state.find(rid);
+                if (it != request_state.end()) {
+                    int c = it->second.c;
+                    if (c >= 0 && c < K) {
+                        computer_request_count[c]--;
+                    }
+                    request_state.erase(it);
+                }
+                output_iter.erase(rid);
+                request_arrival_time.erase(rid);
+            }
+        }
 
         vector<string> assignments;
 
-        // ========================================================
-        // PROCESS EVENTS
-        // ========================================================
-
-        for (int event_index = 0;
-             event_index < num_events;
-             event_index++) {
-
-            string event_type;
-
-            cin >> event_type;
-
-            // ====================================================
-            // ARR
-            // ====================================================
-
-            if (event_type == "ARR") {
-
-                int rid;
-                int Lin;
-
-                cin >> rid >> Lin;
-
-                RequestState state;
-
-                state.stage = "P_PRE";
-                state.computer = -1;
-                state.Lin = Lin;
-                state.task_id = rid % N;
-
-                request_state[rid] = state;
-
-                request_arrival_time[rid] = timestamp;
-
-                output_iter[rid] = 0;
-            }
-
-            // ====================================================
-            // TDN
-            // ====================================================
-
-            else if (event_type == "TDN") {
-
-                string server;
-
-                cin >> server;
-
-                if (server == "E") {
-
-                    local_free = true;
-
-                } else {
-
-                    try {
-
-                        int comp_id;
-
-                        if (server.size() > 0 &&
-                            server[0] == 'C') {
-
-                            comp_id =
-                                atoi(server.substr(1).c_str());
-
-                        } else {
-
-                            comp_id =
-                                atoi(server.c_str());
-                        }
-
-                        if (comp_id >= 0 &&
-                            comp_id < K) {
-
-                            computer_free[comp_id] = true;
-                        }
-
-                    } catch (...) {
-                        // Same behavior as Python's except ValueError
+        // 1. D POST (highest priority for local)
+        if (local_free) {
+            clean_heap(d_post_heap, "D_POST_W");
+            if (!d_post_heap.empty()) {
+                vector<int> batch;
+                while (!d_post_heap.empty() && batch.size() < 64) {
+                    int rid = d_post_heap.top();
+                    d_post_heap.pop();
+                    auto it = request_state.find(rid);
+                    if (it != request_state.end() && it->second.stage == "D_POST_W" && output_down_ready.count({rid, output_iter[rid]})) {
+                        batch.push_back(rid);
                     }
                 }
-            }
-
-            // ====================================================
-            // XDN
-            // ====================================================
-
-            else if (event_type == "XDN") {
-
-                /*
-                    Python:
-
-                    event = input().split()
-
-                    Therefore we must read the complete remaining
-                    line and split it exactly like Python.
-                */
-
-                string direction;
-
-                cin >> direction;
-
-                string remaining_line;
-
-                getline(cin, remaining_line);
-
-                stringstream ss(remaining_line);
-
-                vector<string> event;
-
-                event.push_back("XDN");
-                event.push_back(direction);
-
-                string token;
-
-                while (ss >> token) {
-                    event.push_back(token);
+                if (!batch.empty()) {
+                    string assign = "E D POST -1 " + to_string(batch.size());
+                    for (int rid : batch) assign += " " + to_string(rid);
+                    assignments.push_back(assign);
+                    
+                    for (int rid : batch) {
+                        auto it = request_state.find(rid);
+                        if (it != request_state.end()) {
+                            output_iter[rid]++;
+                            it->second.stage = "D_PRE";
+                            assigned_this_frame.insert(rid);
+                            add_d_pre(rid);
+                        }
+                    }
+                    local_free = false;
                 }
-
-                // ------------------------------------------------
-                // Same as Python:
-                //
-                // if len(event) > 6:
-                // ------------------------------------------------
-
-                if (event.size() > 6) {
-
-                    string phase = event[4];
-
-                    vector<int> rids;
-
-                    for (int i = 6;
-                         i < (int)event.size();
-                         i++) {
-
-                        rids.push_back(
-                            atoi(event[i].c_str())
-                        );
-                    }
-
-                    // ------------------------------------------------
-                    // UP
-                    // ------------------------------------------------
-
-                    if (direction == "UP") {
-
-                        // PRE
-                        if (phase == "PRE") {
-
-                            for (int i = 0;
-                                 i < (int)rids.size();
-                                 i++) {
-
-                                input_up_ready.insert(
-                                    rids[i]
-                                );
-                            }
-
-                        }
-
-                        // DEC
-                        else if (phase == "DEC") {
-
-                            for (int i = 0;
-                                 i < (int)rids.size();
-                                 i++) {
-
-                                int rid = rids[i];
-
-                                pair<int, int> key(
-                                    rid,
-                                    output_iter[rid]
-                                );
-
-                                output_up_ready[key] = true;
-                            }
-                        }
-                    }
-
-                    // ------------------------------------------------
-                    // DOWN
-                    // ------------------------------------------------
-
-                    else if (direction == "DOWN") {
-
-                        // PRE
-                        if (phase == "PRE") {
-
-                            for (int i = 0;
-                                 i < (int)rids.size();
-                                 i++) {
-
-                                input_down_ready.insert(
-                                    rids[i]
-                                );
-                            }
-
-                        }
-
-                        // DEC
-                        else if (phase == "DEC") {
-
-                            for (int i = 0;
-                                 i < (int)rids.size();
-                                 i++) {
-
-                                int rid = rids[i];
-
-                                pair<int, int> key(
-                                    rid,
-                                    output_iter[rid]
-                                );
-
-                                output_down_ready[key] = true;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ====================================================
-            // FIN
-            // ====================================================
-
-            else if (event_type == "FIN") {
-
-                int rid;
-
-                cin >> rid;
-
-                if (request_state.count(rid)) {
-
-                    int c =
-                        request_state[rid].computer;
-
-                    if (c >= 0) {
-
-                        computer_request_count[c] =
-                            max(
-                                0,
-                                computer_request_count[c] - 1
-                            );
-                    }
-
-                    request_state.erase(rid);
-                }
-
-                output_iter.erase(rid);
-
-                request_arrival_time.erase(rid);
-
-                request_assigned_time.erase(rid);
             }
         }
 
-        // ========================================================
-        // P_PRE
-        // ========================================================
+        // 2. D PRE (second priority for local)
+        if (local_free) {
+            vector<int> best_group;
+            double best_score = -1;
 
-        vector<int> request_ids;
-
-        map<int, RequestState>::iterator request_it;
-
-        for (request_it = request_state.begin();
-             request_it != request_state.end();
-             ++request_it) {
-
-            request_ids.push_back(
-                request_it->first
-            );
-        }
-
-        sort(
-            request_ids.begin(),
-            request_ids.end()
-        );
-
-        for (int i = 0;
-             i < (int)request_ids.size();
-             i++) {
-
-            int rid = request_ids[i];
-
-            if (!request_state.count(rid) ||
-                assigned_this_frame.count(rid)) {
-
-                continue;
+            for (int c = 0; c < K; ++c) {
+                vector<int> candidates = peek_valid(d_pre_heaps[c], "D_PRE", 64);
+                if (candidates.empty()) continue;
+                
+                int max_group = min(64, (int)candidates.size());
+                
+                for (int group_size = 1; group_size <= max_group; ++group_size) {
+                    vector<int> group(candidates.begin(), candidates.begin() + group_size);
+                    double min_arr = request_arrival_time[group[0]];
+                    double max_arr = min_arr;
+                    for (int rid : group) {
+                        min_arr = min(min_arr, request_arrival_time[rid]);
+                        max_arr = max(max_arr, request_arrival_time[rid]);
+                    }
+                    
+                    double time_variance = group.empty() ? 0 : (max_arr - min_arr);
+                    double spatial_bonus = group_size * 10;
+                    double temporal_score = (time_variance < 100) ? -time_variance : -time_variance * 10;
+                    double total_score = spatial_bonus + temporal_score;
+                    
+                    if (total_score > best_score) {
+                        best_score = total_score;
+                        best_group = group;
+                    }
+                }
             }
 
-            RequestState& state =
-                request_state[rid];
+            if (best_group.size() < 2) {
+                best_group = peek_valid(d_pre_global, "D_PRE", 64);
+            }
 
-            if (state.stage == "P_PRE" &&
-                local_free) {
+            if (!best_group.empty()) {
+                string assign = "E D PRE -1 " + to_string(best_group.size());
+                for (int rid : best_group) assign += " " + to_string(rid);
+                assignments.push_back(assign);
+                
+                for (int rid : best_group) {
+                    auto it = request_state.find(rid);
+                    if (it != request_state.end() && it->second.stage == "D_PRE") {
+                        it->second.stage = "D_PROC_W";
+                        assigned_this_frame.insert(rid);
+                        add_d_proc(rid);
+                    }
+                }
+                local_free = false;
+            }
+        }
 
-                int c = -1;
+        // 3. P POST (third priority for local)
+        if (local_free) {
+            int best_rid = -1;
+            for (const auto& kv : request_state) {
+                int rid = kv.first;
+                const auto& state = kv.second;
+                if (!assigned_this_frame.count(rid) && state.stage == "P_POST" && input_down_ready.count(rid)) {
+                    if (best_rid == -1 || rid < best_rid) {
+                        best_rid = rid;
+                    }
+                }
+            }
+            if (best_rid != -1) {
+                int rid = best_rid;
+                auto& state = request_state[rid];
+                assignments.push_back("E P POST " + to_string(state.c) + " " + to_string(rid));
+                state.stage = "D_PRE";
+                local_free = false;
+                assigned_this_frame.insert(rid);
+                add_d_pre(rid);
+            }
+        }
 
-                if (K > 0) {
-
-                    int min_load =
-                        *min_element(
-                            computer_request_count.begin(),
-                            computer_request_count.end()
-                        );
-
-                    // --------------------------------------------
-                    // First find free computer with minimum load
-                    // --------------------------------------------
-
-                    for (int comp = 0;
-                         comp < K;
-                         comp++) {
-
-                        if (computer_free[comp] &&
-                            computer_request_count[comp] ==
-                                min_load) {
-
+        // 4. P PRE (lowest priority for local)
+        if (local_free && !p_pre_heap.empty() && K > 0) {
+            clean_heap(p_pre_heap, "P_PRE");
+            if (!p_pre_heap.empty()) {
+                int rid = p_pre_heap.top();
+                p_pre_heap.pop();
+                
+                auto it = request_state.find(rid);
+                if (it != request_state.end() && it->second.stage == "P_PRE") {
+                    int min_load = computer_request_count[0];
+                    for (int comp = 1; comp < K; ++comp) {
+                        if (computer_request_count[comp] < min_load) {
+                            min_load = computer_request_count[comp];
+                        }
+                    }
+                    
+                    int c = -1;
+                    for (int comp = 0; comp < K; ++comp) {
+                        if (computer_free[comp] && computer_request_count[comp] == min_load) {
                             c = comp;
-
                             break;
                         }
                     }
-
-                    // --------------------------------------------
-                    // If none found, choose minimum-load computer
-                    // --------------------------------------------
-
                     if (c == -1) {
-
-                        for (int comp = 0;
-                             comp < K;
-                             comp++) {
-
-                            if (computer_request_count[comp] ==
-                                min_load) {
-
+                        for (int comp = 0; comp < K; ++comp) {
+                            if (computer_request_count[comp] == min_load) {
                                 c = comp;
-
                                 break;
                             }
                         }
                     }
-                }
-
-                // Same condition as Python:
-                //
-                // if c is not None or K > 0:
-                // --------------------------------------------
-
-                if (c != -1 || K > 0) {
-
-                    if (c == -1)
-                        c = 0;
-
-                    assignments.push_back(
-                        "E P PRE " +
-                        to_string(c) +
-                        " " +
-                        to_string(rid)
-                    );
-
-                    state.computer = c;
-
-                    state.stage = "P_PROC";
-
+                    if (c == -1) c = 0;
+                    
+                    assignments.push_back("E P PRE " + to_string(c) + " " + to_string(rid));
+                    it->second.stage = "P_PROC";
+                    it->second.c = c;
+                    
                     computer_request_count[c]++;
-
                     local_free = false;
-
                     assigned_this_frame.insert(rid);
-
-                    request_assigned_time[rid] =
-                        timestamp;
+                    
+                    if (input_up_ready.count(rid)) {
+                        p_proc_heaps[c].push(rid);
+                    }
                 }
             }
         }
 
-        // ========================================================
-        // P_PROC
-        // ========================================================
+        // Remote tasks
+        for (int c = 0; c < K; ++c) {
+            if (!computer_free[c]) continue;
+            
+            clean_heap(p_proc_heaps[c], "P_PROC");
+            if (p_proc_heaps[c].empty()) continue;
+            
+            int rid = p_proc_heaps[c].top();
+            p_proc_heaps[c].pop();
+            
+            auto it = request_state.find(rid);
+            if (it == request_state.end() || it->second.stage != "P_PROC") continue;
+            
+            assignments.push_back("C" + to_string(c) + " P PROC 0 " + to_string(num_layers) + " " + to_string(c) + " " + to_string(rid));
+            
+            computer_free[c] = false;
+            it->second.stage = "P_POST";
+            assigned_this_frame.insert(rid);
+        }
 
-        for (int i = 0;
-             i < (int)request_ids.size();
-             i++) {
-
-            int rid = request_ids[i];
-
-            if (!request_state.count(rid) ||
-                assigned_this_frame.count(rid)) {
-
-                continue;
+        for (int c = 0; c < K; ++c) {
+            if (!computer_free[c]) continue;
+            
+            clean_heap(d_proc_heaps[c], "D_PROC_W");
+            if (d_proc_heaps[c].empty()) continue;
+            
+            vector<int> batch;
+            while (!d_proc_heaps[c].empty() && batch.size() < 64) {
+                int rid = d_proc_heaps[c].top();
+                d_proc_heaps[c].pop();
+                auto it = request_state.find(rid);
+                if (it != request_state.end() && it->second.stage == "D_PROC_W" && output_up_ready.count({rid, output_iter[rid]})) {
+                    batch.push_back(rid);
+                }
             }
-
-            RequestState& state =
-                request_state[rid];
-
-            if (state.stage == "P_PROC" &&
-                input_up_ready.count(rid)) {
-
-                int c = state.computer;
-
-                if (computer_free[c]) {
-
-                    assignments.push_back(
-                        "C" +
-                        to_string(c) +
-                        " P PROC 0 " +
-                        to_string(num_layers) +
-                        " " +
-                        to_string(c) +
-                        " " +
-                        to_string(rid)
-                    );
-
-                    computer_free[c] = false;
-
+            if (batch.empty()) continue;
+            
+            string assign = "C" + to_string(c) + " D PROC " + to_string(c) + " " + to_string(batch.size());
+            for (int rid : batch) assign += " " + to_string(rid);
+            assignments.push_back(assign);
+            
+            for (int rid : batch) {
+                auto it = request_state.find(rid);
+                if (it != request_state.end()) {
+                    it->second.stage = "D_POST_W";
                     assigned_this_frame.insert(rid);
-
-                    state.stage = "P_POST";
+                    add_d_post(rid);
                 }
             }
+            computer_free[c] = false;
         }
 
-        // ========================================================
-        // P_POST
-        // ========================================================
-
-        for (int i = 0;
-             i < (int)request_ids.size();
-             i++) {
-
-            int rid = request_ids[i];
-
-            if (!request_state.count(rid) ||
-                assigned_this_frame.count(rid)) {
-
-                continue;
-            }
-
-            RequestState& state =
-                request_state[rid];
-
-            if (state.stage == "P_POST" &&
-                input_down_ready.count(rid) &&
-                local_free) {
-
-                assignments.push_back(
-                    "E P POST " +
-                    to_string(state.computer) +
-                    " " +
-                    to_string(rid)
-                );
-
-                state.stage = "D_PRE";
-
-                local_free = false;
-
-                assigned_this_frame.insert(rid);
-            }
+        cout << assignments.size() << "\n";
+        for (const string& assign : assignments) {
+            cout << assign << "\n";
         }
-
-        // ========================================================
-        // D_PRE READY
-        // ========================================================
-
-        vector<int> d_pre_ready;
-
-        for (int i = 0;
-             i < (int)request_state.size();
-             i++) {
-
-            int rid = request_ids[i];
-
-            if (!request_state.count(rid))
-                continue;
-
-            if (assigned_this_frame.count(rid))
-                continue;
-
-            if (request_state[rid].stage == "D_PRE") {
-
-                d_pre_ready.push_back(rid);
-            }
-        }
-
-        // ========================================================
-        // D_PRE GROUPING
-        // ========================================================
-
-        if (!d_pre_ready.empty() &&
-            local_free) {
-
-            map<int, vector<int> > grouped_by_computer;
-
-            for (int i = 0;
-                 i < (int)d_pre_ready.size();
-                 i++) {
-
-                int rid = d_pre_ready[i];
-
-                int c =
-                    request_state[rid].computer;
-
-                grouped_by_computer[c].push_back(rid);
-            }
-
-            vector<int> best_group;
-
-            double best_score = -1;
-
-            // ----------------------------------------------------
-            // Same as:
-            //
-            // for c in sorted(grouped_by_computer.keys()):
-            // ----------------------------------------------------
-
-            map<int, vector<int> >::iterator group_it;
-
-            for (group_it = grouped_by_computer.begin();
-                 group_it != grouped_by_computer.end();
-                 ++group_it) {
-
-                vector<int>& candidates =
-                    group_it->second;
-
-                // ------------------------------------------------
-                // Python:
-                //
-                // for group_size in range(
-                //     1,
-                //     min(5, len(candidates) + 1)
-                // ):
-                //
-                // C++ upper bound is inclusive.
-                // ------------------------------------------------
-
-                int max_group_size =
-                    min(5, (int)candidates.size());
-
-                for (int group_size = 1;
-                     group_size <= max_group_size;
-                     group_size++) {
-
-                    vector<int> group(
-                        candidates.begin(),
-                        candidates.begin() + group_size
-                    );
-
-                    double spatial_bonus =
-                        group_size * 10.0;
-
-                    vector<double> arrivals;
-
-                    for (int j = 0;
-                         j < (int)group.size();
-                         j++) {
-
-                        int rid = group[j];
-
-                        arrivals.push_back(
-                            request_arrival_time[rid]
-                        );
-                    }
-
-                    double time_variance = 0;
-
-                    if (!arrivals.empty()) {
-
-                        double min_arrival =
-                            *min_element(
-                                arrivals.begin(),
-                                arrivals.end()
-                            );
-
-                        double max_arrival =
-                            *max_element(
-                                arrivals.begin(),
-                                arrivals.end()
-                            );
-
-                        time_variance =
-                            max_arrival -
-                            min_arrival;
-                    }
-
-                    double temporal_score;
-
-                    if (time_variance < 100) {
-
-                        temporal_score =
-                            -time_variance;
-
-                    } else {
-
-                        temporal_score =
-                            -time_variance * 10;
-                    }
-
-                    double total_score =
-                        spatial_bonus +
-                        temporal_score;
-
-                    if (total_score > best_score) {
-
-                        best_score =
-                            total_score;
-
-                        best_group =
-                            group;
-                    }
-                }
-            }
-
-            // ----------------------------------------------------
-            // Python:
-            //
-            // if best_group is None or len(best_group) < 2:
-            //     best_group = d_pre_ready[:min(len(d_pre_ready), 4)]
-            // ----------------------------------------------------
-
-            if (best_group.empty() ||
-                best_group.size() < 2) {
-
-                int count =
-                    min(
-                        (int)d_pre_ready.size(),
-                        4
-                    );
-
-                best_group.assign(
-                    d_pre_ready.begin(),
-                    d_pre_ready.begin() + count
-                );
-            }
-
-            // ----------------------------------------------------
-            // Create assignment
-            // ----------------------------------------------------
-
-            string assignment =
-                "E D PRE -1 " +
-                to_string(best_group.size());
-
-            for (int i = 0;
-                 i < (int)best_group.size();
-                 i++) {
-
-                assignment +=
-                    " " +
-                    to_string(best_group[i]);
-            }
-
-            assignments.push_back(assignment);
-
-            // ----------------------------------------------------
-            // Update states
-            // ----------------------------------------------------
-
-            for (int i = 0;
-                 i < (int)best_group.size();
-                 i++) {
-
-                int rid =
-                    best_group[i];
-
-                request_state[rid].stage =
-                    "D_PROC_W";
-
-                assigned_this_frame.insert(rid);
-            }
-
-            local_free = false;
-        }
-
-        // ========================================================
-        // D_PROC
-        // ========================================================
-
-        for (int c = 0;
-             c < K;
-             c++) {
-
-            vector<int> d_proc_ready;
-
-            for (int i = 0;
-                 i < (int)request_ids.size();
-                 i++) {
-
-                int rid =
-                    request_ids[i];
-
-                if (!request_state.count(rid) ||
-                    assigned_this_frame.count(rid)) {
-
-                    continue;
-                }
-
-                RequestState& state =
-                    request_state[rid];
-
-                pair<int, int> key(
-                    rid,
-                    output_iter[rid]
-                );
-
-                if (state.stage == "D_PROC_W" &&
-                    state.computer == c &&
-                    output_up_ready.count(key)) {
-
-                    d_proc_ready.push_back(rid);
-                }
-            }
-
-            if (!d_proc_ready.empty() &&
-                computer_free[c]) {
-
-                int batch_size =
-                    min(
-                        (int)d_proc_ready.size(),
-                        16
-                    );
-
-                vector<int> batch(
-                    d_proc_ready.begin(),
-                    d_proc_ready.begin() + batch_size
-                );
-
-                string assignment =
-                    "C" +
-                    to_string(c) +
-                    " D PROC " +
-                    to_string(c) +
-                    " " +
-                    to_string(batch.size());
-
-                for (int i = 0;
-                     i < (int)batch.size();
-                     i++) {
-
-                    assignment +=
-                        " " +
-                        to_string(batch[i]);
-                }
-
-                assignments.push_back(assignment);
-
-                for (int i = 0;
-                     i < (int)batch.size();
-                     i++) {
-
-                    int rid =
-                        batch[i];
-
-                    request_state[rid].stage =
-                        "D_POST_W";
-
-                    assigned_this_frame.insert(rid);
-                }
-
-                computer_free[c] = false;
-            }
-        }
-
-        // ========================================================
-        // D_POST
-        // ========================================================
-
-        vector<int> d_post_ready;
-
-        for (int i = 0;
-             i < (int)request_ids.size();
-             i++) {
-
-            int rid =
-                request_ids[i];
-
-            if (!request_state.count(rid) ||
-                assigned_this_frame.count(rid)) {
-
-                continue;
-            }
-
-            RequestState& state =
-                request_state[rid];
-
-            pair<int, int> key(
-                rid,
-                output_iter[rid]
-            );
-
-            if (state.stage == "D_POST_W" &&
-                output_down_ready.count(key)) {
-
-                d_post_ready.push_back(rid);
-            }
-        }
-
-        if (!d_post_ready.empty() &&
-            local_free) {
-
-            int batch_size =
-                min(
-                    (int)d_post_ready.size(),
-                    16
-                );
-
-            vector<int> batch(
-                d_post_ready.begin(),
-                d_post_ready.begin() + batch_size
-            );
-
-            string assignment =
-                "E D POST -1 " +
-                to_string(batch.size());
-
-            for (int i = 0;
-                 i < (int)batch.size();
-                 i++) {
-
-                assignment +=
-                    " " +
-                    to_string(batch[i]);
-            }
-
-            assignments.push_back(assignment);
-
-            for (int i = 0;
-                 i < (int)batch.size();
-                 i++) {
-
-                int rid =
-                    batch[i];
-
-                output_iter[rid]++;
-
-                request_state[rid].stage =
-                    "D_PRE";
-
-                assigned_this_frame.insert(rid);
-            }
-
-            local_free = false;
-        }
-
-        // ========================================================
-        // OUTPUT
-        // ========================================================
-
-        cout << assignments.size() << '\n';
-
-        for (int i = 0;
-             i < (int)assignments.size();
-             i++) {
-
-            cout << assignments[i] << '\n';
-        }
-
-        cout.flush();
+        cout << flush;
     }
 
     return 0;

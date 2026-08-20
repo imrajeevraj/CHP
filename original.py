@@ -3,20 +3,24 @@ import heapq
 
 def main():
     input = sys.stdin.buffer.readline
-    write = sys.stdout.write
 
     params1 = input().split()
-    if not params1:
-        return
     K = int(params1[0])
-    tp_base = int(float(params1[5]))
+    S = float(params1[1])
+    SLO1 = float(params1[2])
+    SLO2 = float(params1[3])
+    tp_ub = float(params1[4])
+    tp_base = float(params1[5])
 
     params2 = input().split()
+    dist_base = float(params2[0])
+    tp_th = float(params2[1])
 
     N = int(input())
 
+    task_table = []
     for _ in range(N):
-        input() 
+        task_table.append(list(map(float, input().split())))
 
     request_state = {}
     request_arrival_time = {}
@@ -33,37 +37,65 @@ def main():
 
     p_pre_heap = []
     p_proc_heaps = [[] for _ in range(K)]
-    p_post_heap = []
     d_pre_heaps = [[] for _ in range(K)]
     d_proc_heaps = [[] for _ in range(K)]
     d_pre_global = []
     d_post_heap = []
 
+    def valid(rid, stage):
+        state = request_state.get(rid)
+        return state is not None and state[0] == stage
+
     def clean_heap(heap, stage):
         while heap:
             rid = heap[0]
-            state = request_state.get(rid)
-            if state is not None and state[0] == stage:
+            if valid(rid, stage):
                 break
             heapq.heappop(heap)
 
     def peek_valid(heap, stage, limit):
         result = []
+
         while heap and len(result) < limit:
             rid = heapq.heappop(heap)
-            state = request_state.get(rid)
-            if state is not None and state[0] == stage:
+
+            if valid(rid, stage):
                 result.append(rid)
+
         for rid in result:
             heapq.heappush(heap, rid)
+
         return result
+
+    def add_p_proc(rid):
+        state = request_state.get(rid)
+        if state is not None and state[0] == 'P_PROC':
+            heapq.heappush(p_proc_heaps[state[1]], rid)
+
+    def add_d_pre(rid):
+        state = request_state.get(rid)
+        if state is not None and state[0] == 'D_PRE':
+            c = state[1]
+            heapq.heappush(d_pre_heaps[c], rid)
+            heapq.heappush(d_pre_global, rid)
+
+    def add_d_proc(rid):
+        state = request_state.get(rid)
+        if state is not None and state[0] == 'D_PROC_W':
+            c = state[1]
+            if (rid, output_iter[rid]) in output_up_ready:
+                heapq.heappush(d_proc_heaps[c], rid)
+
+    def add_d_post(rid):
+        state = request_state.get(rid)
+        if state is not None and state[0] == 'D_POST_W':
+            if (rid, output_iter[rid]) in output_down_ready:
+                heapq.heappush(d_post_heap, rid)
 
     while True:
         timestamp_line = input().strip()
 
         if timestamp_line == b"END":
-            break
-        if not timestamp_line:
             break
 
         timestamp = float(timestamp_line)
@@ -103,47 +135,45 @@ def main():
                         pass
 
             elif event_type == b"XDN":
+                direction = event[1]
+
                 if len(event) <= 6:
                     continue
 
-                direction = event[1]
                 phase = event[4]
+                rids = [int(event[i]) for i in range(6, len(event))]
 
                 if direction == b"UP":
                     if phase == b"PRE":
-                        for i in range(6, len(event)):
-                            rid = int(event[i])
+                        for rid in rids:
                             input_up_ready.add(rid)
                             state = request_state.get(rid)
+
                             if state is not None and state[0] == 'P_PROC':
-                                heapq.heappush(p_proc_heaps[state[1]], rid)
+                                add_p_proc(rid)
 
                     elif phase == b"DEC":
-                        for i in range(6, len(event)):
-                            rid = int(event[i])
-                            key = (rid, output_iter.get(rid, 0))
+                        for rid in rids:
+                            key = (rid, output_iter[rid])
                             output_up_ready.add(key)
                             state = request_state.get(rid)
+
                             if state is not None and state[0] == 'D_PROC_W':
-                                heapq.heappush(d_proc_heaps[state[1]], rid)
+                                add_d_proc(rid)
 
                 elif direction == b"DOWN":
                     if phase == b"PRE":
-                        for i in range(6, len(event)):
-                            rid = int(event[i])
+                        for rid in rids:
                             input_down_ready.add(rid)
-                            state = request_state.get(rid)
-                            if state is not None and state[0] == 'P_POST':
-                                heapq.heappush(p_post_heap, rid)
 
                     elif phase == b"DEC":
-                        for i in range(6, len(event)):
-                            rid = int(event[i])
-                            key = (rid, output_iter.get(rid, 0))
+                        for rid in rids:
+                            key = (rid, output_iter[rid])
                             output_down_ready.add(key)
                             state = request_state.get(rid)
+
                             if state is not None and state[0] == 'D_POST_W':
-                                heapq.heappush(d_post_heap, rid)
+                                add_d_post(rid)
 
             elif event_type == b"FIN":
                 rid = int(event[1])
@@ -169,17 +199,19 @@ def main():
 
                 if state is not None and state[0] == 'P_PRE':
                     min_load = min(computer_request_count)
-                    c_free = -1
-                    c_any = -1
+                    c = -1
+
                     for comp in range(K):
-                        if computer_request_count[comp] == min_load:
-                            if c_any == -1:
-                                c_any = comp
-                            if computer_free[comp]:
-                                c_free = comp
+                        if computer_free[comp] and computer_request_count[comp] == min_load:
+                            c = comp
+                            break
+
+                    if c == -1:
+                        for comp in range(K):
+                            if computer_request_count[comp] == min_load:
+                                c = comp
                                 break
-                    
-                    c = c_free if c_free != -1 else c_any
+
                     if c == -1:
                         c = 0
 
@@ -211,55 +243,50 @@ def main():
             if state is None or state[0] != 'P_PROC':
                 continue
 
-            assignments.append(f"C{c} P PROC 0 {tp_base} {c} {rid}")
+            assignments.append(
+                f"C{c} P PROC 0 {int(tp_base)} {c} {rid}"
+            )
 
             computer_free[c] = False
             state[0] = 'P_POST'
             assigned_this_frame.add(rid)
-            
-            if rid in input_down_ready:
-                heapq.heappush(p_post_heap, rid)
 
-        if local_free and p_post_heap:
+        if local_free:
             best_rid = None
-            temp = []
 
-            while p_post_heap:
-                rid = p_post_heap[0]
-                state = request_state.get(rid)
-                
-                if state is not None and state[0] == 'P_POST' and rid in input_down_ready:
-                    if rid not in assigned_this_frame:
-                        best_rid = heapq.heappop(p_post_heap)
-                        break
-                    else:
-                        temp.append(heapq.heappop(p_post_heap))
-                else:
-                    heapq.heappop(p_post_heap)
-            
-            for r in temp:
-                heapq.heappush(p_post_heap, r)
+            for rid, state in request_state.items():
+                if (
+                    rid not in assigned_this_frame
+                    and state[0] == 'P_POST'
+                    and rid in input_down_ready
+                ):
+                    if best_rid is None or rid < best_rid:
+                        best_rid = rid
 
             if best_rid is not None:
                 rid = best_rid
                 state = request_state[rid]
 
-                assignments.append(f"E P POST {state[1]} {rid}")
+                assignments.append(
+                    f"E P POST {state[1]} {rid}"
+                )
 
                 state[0] = 'D_PRE'
                 local_free = False
                 assigned_this_frame.add(rid)
 
-                c = state[1]
-                heapq.heappush(d_pre_heaps[c], rid)
-                heapq.heappush(d_pre_global, rid)
+                add_d_pre(rid)
 
         if local_free:
             best_group = None
             best_score = -1
 
             for c in range(K):
-                candidates = peek_valid(d_pre_heaps[c], 'D_PRE', 5)
+                candidates = peek_valid(
+                    d_pre_heaps[c],
+                    'D_PRE',
+                    5
+                )
 
                 if not candidates:
                     continue
@@ -268,14 +295,25 @@ def main():
 
                 for group_size in range(1, max_group + 1):
                     group = candidates[:group_size]
-                    
-                    if not group: continue
 
-                    arrivals = [request_arrival_time[rid] for rid in group]
-                    time_variance = max(arrivals) - min(arrivals)
+                    arrivals = [
+                        request_arrival_time[rid]
+                        for rid in group
+                    ]
+
+                    time_variance = (
+                        max(arrivals) - min(arrivals)
+                        if arrivals
+                        else 0
+                    )
 
                     spatial_bonus = group_size * 10
-                    temporal_score = -time_variance if time_variance < 100 else -time_variance * 10
+
+                    if time_variance < 100:
+                        temporal_score = -time_variance
+                    else:
+                        temporal_score = -time_variance * 10
+
                     total_score = spatial_bonus + temporal_score
 
                     if total_score > best_score:
@@ -283,10 +321,17 @@ def main():
                         best_group = group
 
             if best_group is None or len(best_group) < 2:
-                best_group = peek_valid(d_pre_global, 'D_PRE', 4)
+                best_group = peek_valid(
+                    d_pre_global,
+                    'D_PRE',
+                    4
+                )
 
             if best_group:
-                assignments.append(f"E D PRE -1 {len(best_group)} " + " ".join(map(str, best_group)))
+                assignments.append(
+                    f"E D PRE -1 {len(best_group)} "
+                    + " ".join(map(str, best_group))
+                )
 
                 for rid in best_group:
                     state = request_state.get(rid)
@@ -294,9 +339,7 @@ def main():
                     if state is not None and state[0] == 'D_PRE':
                         state[0] = 'D_PROC_W'
                         assigned_this_frame.add(rid)
-                        
-                        if (rid, output_iter.get(rid, 0)) in output_up_ready:
-                            heapq.heappush(d_proc_heaps[state[1]], rid)
+                        add_d_proc(rid)
 
                 local_free = False
 
@@ -316,13 +359,20 @@ def main():
                 rid = heapq.heappop(heap)
                 state = request_state.get(rid)
 
-                if state is not None and state[0] == 'D_PROC_W' and (rid, output_iter.get(rid, 0)) in output_up_ready:
+                if (
+                    state is not None
+                    and state[0] == 'D_PROC_W'
+                    and (rid, output_iter[rid]) in output_up_ready
+                ):
                     batch.append(rid)
 
             if not batch:
                 continue
 
-            assignments.append(f"C{c} D PROC {c} {len(batch)} " + " ".join(map(str, batch)))
+            assignments.append(
+                f"C{c} D PROC {c} {len(batch)} "
+                + " ".join(map(str, batch))
+            )
 
             for rid in batch:
                 state = request_state.get(rid)
@@ -330,9 +380,7 @@ def main():
                 if state is not None:
                     state[0] = 'D_POST_W'
                     assigned_this_frame.add(rid)
-                    
-                    if (rid, output_iter.get(rid, 0)) in output_down_ready:
-                        heapq.heappush(d_post_heap, rid)
+                    add_d_post(rid)
 
             computer_free[c] = False
 
@@ -346,32 +394,37 @@ def main():
                     rid = heapq.heappop(d_post_heap)
                     state = request_state.get(rid)
 
-                    if state is not None and state[0] == 'D_POST_W' and (rid, output_iter.get(rid, 0)) in output_down_ready:
+                    if (
+                        state is not None
+                        and state[0] == 'D_POST_W'
+                        and (rid, output_iter[rid]) in output_down_ready
+                    ):
                         batch.append(rid)
 
                 if batch:
-                    assignments.append(f"E D POST -1 {len(batch)} " + " ".join(map(str, batch)))
+                    assignments.append(
+                        f"E D POST -1 {len(batch)} "
+                        + " ".join(map(str, batch))
+                    )
 
                     for rid in batch:
                         state = request_state.get(rid)
 
                         if state is not None:
-                            output_iter[rid] = output_iter.get(rid, 0) + 1
+                            output_iter[rid] += 1
                             state[0] = 'D_PRE'
                             assigned_this_frame.add(rid)
-                            
-                            c = state[1]
-                            heapq.heappush(d_pre_heaps[c], rid)
-                            heapq.heappush(d_pre_global, rid)
+                            add_d_pre(rid)
 
                     local_free = False
 
-        write(str(len(assignments)) + '\n')
+        sys.stdout.write(str(len(assignments)) + '\n')
 
         if assignments:
-            write('\n'.join(assignments) + '\n')
+            sys.stdout.write('\n'.join(assignments) + '\n')
 
         sys.stdout.flush()
+
 
 if __name__ == "__main__":
     main()
