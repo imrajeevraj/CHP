@@ -1,470 +1,661 @@
-#include <bits/stdc++.h>
+#include <algorithm>
+#include <bitset>
+#include <cmath>
+#include <iomanip>
+#include <iostream>
+#include <map>
+#include <queue>
+#include <set>
+#include <stack>
+#include <string>
+#include <vector>
+
 using namespace std;
 
-struct RequestState {
-    string stage;
-    int c;
-    int Lin;
-};
+// ==================== FAST I/O ====================
+static const int IBUF_SIZE = 1 << 16;
+static char ibuf[IBUF_SIZE];
+static int ibuf_pos = 0, ibuf_len = 0;
 
-// custom hash for pair
-struct pair_hash {
-    template <class T1, class T2>
-    std::size_t operator () (const std::pair<T1,T2> &p) const {
-        auto h1 = std::hash<T1>{}(p.first);
-        auto h2 = std::hash<T2>{}(p.second);
-        return h1 ^ (h2 << 1);
+inline int read_char() {
+  if (ibuf_pos >= ibuf_len) {
+    ibuf_len = fread(ibuf, 1, IBUF_SIZE, stdin);
+    ibuf_pos = 0;
+    if (ibuf_len == 0)
+      return -1;
+  }
+  return ibuf[ibuf_pos++];
+}
+
+static char token[64];
+static int token_len = 0;
+
+inline bool read_token() {
+  token_len = 0;
+  int c = read_char();
+  while (c >= 0 && c <= ' ')
+    c = read_char();
+  if (c < 0)
+    return false;
+  while (c > ' ') {
+    token[token_len++] = (char)c;
+    c = read_char();
+  }
+  token[token_len] = '\0';
+  return true;
+}
+
+inline int parse_int() {
+  int v = 0, i = 0;
+  bool neg = false;
+  if (token_len > 0 && token[0] == '-') {
+    neg = true;
+    i = 1;
+  } else if (token_len > 0 && token[0] == '+')
+    i = 1;
+  for (; i < token_len; i++)
+    v = v * 10 + (token[i] - '0');
+  return neg ? -v : v;
+}
+
+inline double parse_double() { return atof(token); }
+
+inline int next_int() {
+  read_token();
+  return parse_int();
+}
+inline double next_double() {
+  read_token();
+  return parse_double();
+}
+
+static const int OBUF_SIZE = 1 << 16;
+static char obuf[OBUF_SIZE];
+static int obuf_pos = 0;
+
+inline void write_char(char c) {
+  if (obuf_pos >= OBUF_SIZE) {
+    fwrite(obuf, 1, obuf_pos, stdout);
+    obuf_pos = 0;
+  }
+  obuf[obuf_pos++] = c;
+}
+
+inline void write_int(int v) {
+  if (v < 0) {
+    write_char('-');
+    v = -v;
+  }
+  if (v == 0) {
+    write_char('0');
+    return;
+  }
+  char buf[12];
+  int p = 0;
+  while (v > 0) {
+    buf[p++] = (char)('0' + v % 10);
+    v /= 10;
+  }
+  while (p > 0)
+    write_char(buf[--p]);
+}
+
+inline void write_string(const char *s) {
+  while (*s)
+    write_char(*s++);
+}
+
+inline void flush_out() {
+  if (obuf_pos > 0) {
+    fwrite(obuf, 1, obuf_pos, stdout);
+    obuf_pos = 0;
+  }
+  fflush(stdout);
+}
+
+// Assignment buffer
+static char abuf[1 << 14];
+static int abuf_pos = 0;
+static int assign_count = 0;
+
+inline void a_char(char c) { abuf[abuf_pos++] = c; }
+inline void a_string(const char *s) {
+  while (*s)
+    a_char(*s++);
+}
+inline void a_int(int v) {
+  if (v < 0) {
+    a_char('-');
+    v = -v;
+  }
+  if (v == 0) {
+    a_char('0');
+    return;
+  }
+  char buf[12];
+  int p = 0;
+  while (v > 0) {
+    buf[p++] = (char)('0' + v % 10);
+    v /= 10;
+  }
+  while (p > 0)
+    a_char(buf[--p]);
+}
+
+// ==================== PARAMS & TASK-TIME TABLE ====================
+int K, NL, BPT;
+double S, LAT, BW;
+double SLO1, SLO2, TPUB, TPB, DSTB, WTP, WC;
+
+const int COL_PP = 0, COL_PPR = 1, COL_PPO = 2;
+const int COL_DP = 3, COL_DPR = 4, COL_DPO = 5;
+
+vector<int> ttK[6];
+vector<double> ttV[6];
+
+void build_task_table() {
+  int N = next_int();
+  vector<int> rawBS(N);
+  vector<vector<double>> rawV(N, vector<double>(6));
+  for (int i = 0; i < N; i++) {
+    rawBS[i] = next_int();
+    for (int c = 0; c < 6; c++)
+      rawV[i][c] = next_double();
+  }
+  for (int c = 0; c < 6; c++) {
+    vector<pair<int, double>> entries;
+    for (int i = 0; i < N; i++) {
+      if (rawV[i][c] > -0.5) {
+        entries.push_back({rawBS[i], rawV[i][c]});
+      }
     }
+    sort(entries.begin(), entries.end());
+    for (auto &e : entries) {
+      ttK[c].push_back(e.first);
+      ttV[c].push_back(e.second);
+    }
+  }
+}
+
+double lookup(int col, int bs) {
+  int n = ttK[col].size();
+  if (n == 0)
+    return 1.0;
+  if (bs <= ttK[col][0])
+    return ttV[col][0];
+  if (bs >= ttK[col][n - 1])
+    return ttV[col][n - 1];
+
+  int lo = 0, hi = n - 1;
+  while (lo < hi - 1) {
+    int mid = lo + (hi - lo) / 2;
+    if (ttK[col][mid] <= bs)
+      lo = mid;
+    else
+      hi = mid;
+  }
+  if (ttK[col][lo] == bs)
+    return ttV[col][lo];
+  if (ttK[col][hi] == bs)
+    return ttV[col][hi];
+  double frac = (double)(bs - ttK[col][lo]) / (ttK[col][hi] - ttK[col][lo]);
+  return ttV[col][lo] + frac * (ttV[col][hi] - ttV[col][lo]);
+}
+
+// ==================== STATE MACHINE ====================
+const int MAX_REQ = 2005;
+
+enum State : uint8_t {
+  ST_NONE = 0,
+  ST_PPRE_E = 1,
+  ST_PPRE_F = 2,
+  ST_W_UP_P = 3,
+  ST_PPRC_E = 4,
+  ST_PPRC_F = 5,
+  ST_W_DN_P = 6,
+  ST_PPST_E = 7,
+  ST_PPST_F = 8,
+  ST_OUT_R = 9,
+  ST_DPRE_F = 10,
+  ST_W_UP_D = 11,
+  ST_DPRC_E = 12,
+  ST_DPRC_F = 13,
+  ST_W_DN_D = 14,
+  ST_DPST_E = 15,
+  ST_DPST_F = 16,
+  ST_FIN = 17
 };
 
-using MinHeap = priority_queue<int, vector<int>, greater<int>>;
+uint8_t rs[MAX_REQ];
+int rln[MAX_REQ];
+int rrm[MAX_REQ];
+int rnp[MAX_REQ];
+double rat[MAX_REQ];
+double rrt[MAX_REQ];
+int roi[MAX_REQ];
+
+bool lcF;
+bool rcF[8];
+int rcL[8];
+int maxR = -1;
+
+vector<int> fnR;
+int tmp[MAX_REQ];
+
+// ==================== EVENTS ====================
+void processTDN(double ts) {
+  read_token(); // server
+  int sv;
+  if (token[0] == 'E') {
+    sv = -1;
+    lcF = true;
+  } else {
+    sv = 0;
+    for (int i = 1; i < token_len; i++)
+      sv = sv * 10 + (token[i] - '0');
+    if (sv >= 0 && sv < K)
+      rcF[sv] = true;
+  }
+
+  read_token(); // P or D
+  bool isP = (token[0] == 'P');
+
+  read_token(); // PRE, PROC, POST
+  int step;
+  if (token_len == 3 && token[2] == 'E')
+    step = 0;
+  else if (token_len == 4 && token[2] == 'O' && token[3] == 'C')
+    step = 1;
+  else
+    step = 2;
+
+  if (isP) {
+    if (step == 0) {
+      int remote = next_int();
+      int rid = next_int();
+      next_double();
+      rs[rid] = ST_W_UP_P;
+    } else if (step == 1) {
+      int ls = next_int();
+      int le = next_int();
+      int remote = next_int();
+      int rid = next_int();
+      next_double();
+      if (le >= NL) {
+        rs[rid] = ST_W_DN_P;
+      } else {
+        rs[rid] = ST_PPRC_E;
+        rnp[rid] = le;
+      }
+    } else {
+      int remote = next_int();
+      int rid = next_int();
+      next_double();
+      rs[rid] = ST_OUT_R;
+      rrt[rid] = ts;
+    }
+  } else {
+    if (step == 0) {
+      next_int(); // -1
+      int m = next_int();
+      for (int i = 0; i < m; i++)
+        rs[next_int()] = ST_W_UP_D;
+      next_double();
+    } else if (step == 1) {
+      next_int(); // remote
+      int m = next_int();
+      for (int i = 0; i < m; i++)
+        rs[next_int()] = ST_W_DN_D;
+      next_double();
+    } else {
+      next_int(); // -1
+      int m = next_int();
+      for (int i = 0; i < m; i++) {
+        int rid = next_int();
+        rs[rid] = ST_OUT_R;
+        roi[rid]++;
+        rrt[rid] = ts;
+      }
+      next_double();
+    }
+  }
+}
+
+void processXDN() {
+  read_token();
+  bool isUp = (token[0] == 'U');
+  next_int();
+  next_int();
+  read_token();
+  bool isPre = (token[0] == 'P');
+  int m = next_int();
+  for (int i = 0; i < m; i++) {
+    int rid = next_int();
+    if (isUp && isPre)
+      rs[rid] = ST_PPRC_E;
+    else if (!isUp && isPre)
+      rs[rid] = ST_PPST_E;
+    else if (isUp)
+      rs[rid] = ST_DPRC_E;
+    else
+      rs[rid] = ST_DPST_E;
+  }
+}
+
+// ==================== SCHEDULING ====================
+int selectRemote() {
+  int best = 0, bestLoad = rcL[0];
+  bool bestFree = rcF[0];
+  for (int k = 1; k < K; k++) {
+    int load = rcL[k];
+    bool free = rcF[k];
+    if ((!bestFree && free) || (bestFree == free && load < bestLoad)) {
+      best = k;
+      bestLoad = load;
+      bestFree = free;
+    }
+  }
+  return best;
+}
+
+int chooseDPreGroup(int cnt, double ts) {
+  if (cnt <= 1)
+    return cnt;
+
+  int best = 1;
+  double bestEff = 0;
+  int remCnt[8] = {0};
+
+  for (int m = 1; m <= cnt; m++) {
+    int r = rrm[tmp[m - 1]];
+    if (r >= 0 && r < K)
+      remCnt[r]++;
+
+    int maxPR = 0;
+    for (int k = 0; k < K; k++) {
+      if (remCnt[k] > maxPR)
+        maxPR = remCnt[k];
+    }
+
+    double dpre = lookup(COL_DP, m);
+    double dproc = lookup(COL_DPR, maxPR);
+    double dpost = lookup(COL_DPO, m);
+
+    double upTotal = 0;
+    for (int k = 0; k < K; k++) {
+      if (remCnt[k] > 0)
+        upTotal += LAT + 8.0 * remCnt[k] * BPT / (BW * 1e6);
+    }
+    double downTotal = upTotal;
+
+    double totalCycle =
+        (S + dpre) + upTotal + (S + dproc) + downTotal + (S + dpost);
+    double eff = (double)m / totalCycle;
+
+    if (eff > bestEff) {
+      bestEff = eff;
+      best = m;
+    }
+  }
+
+  if (SLO2 > 0) {
+    double maxAge = 0;
+    for (int i = 0; i < cnt; i++) {
+      double age = ts - rrt[tmp[i]];
+      if (age > maxAge)
+        maxAge = age;
+    }
+    if (maxAge > SLO2 * 0.8) {
+      best = min(best, max(1, cnt / 2));
+    }
+  }
+  return best;
+}
+
+inline void emitPPre(int remote, int rid) {
+  a_string("E P PRE ");
+  a_int(remote);
+  a_char(' ');
+  a_int(rid);
+  a_char('\n');
+  rs[rid] = ST_PPRE_F;
+  rrm[rid] = remote;
+  rcL[remote]++;
+  assign_count++;
+  lcF = false;
+}
+
+inline void emitPProc(int k, int rid) {
+  int ls = rnp[rid];
+  int le = NL; // One chunk for maximum protocol safety
+  a_char('C');
+  a_int(k);
+  a_string(" P PROC ");
+  a_int(ls);
+  a_char(' ');
+  a_int(le);
+  a_char(' ');
+  a_int(k);
+  a_char(' ');
+  a_int(rid);
+  a_char('\n');
+  rs[rid] = ST_PPRC_F;
+  rnp[rid] = le;
+  assign_count++;
+  rcF[k] = false;
+}
+
+inline void emitPPost(int rid) {
+  a_string("E P POST ");
+  a_int(rrm[rid]);
+  a_char(' ');
+  a_int(rid);
+  a_char('\n');
+  rs[rid] = ST_PPST_F;
+  assign_count++;
+  lcF = false;
+}
+
+inline void emitDPre(int gs) {
+  a_string("E D PRE -1 ");
+  a_int(gs);
+  for (int i = 0; i < gs; i++) {
+    a_char(' ');
+    a_int(tmp[i]);
+    rs[tmp[i]] = ST_DPRE_F;
+  }
+  a_char('\n');
+  assign_count++;
+  lcF = false;
+}
+
+inline void emitDProc(int k, int cnt) {
+  a_char('C');
+  a_int(k);
+  a_string(" D PROC ");
+  a_int(k);
+  a_char(' ');
+  a_int(cnt);
+  for (int i = 0; i < cnt; i++) {
+    a_char(' ');
+    a_int(tmp[i]);
+    rs[tmp[i]] = ST_DPRC_F;
+  }
+  a_char('\n');
+  assign_count++;
+  rcF[k] = false;
+}
+
+inline void emitDPost(int cnt) {
+  a_string("E D POST -1 ");
+  a_int(cnt);
+  for (int i = 0; i < cnt; i++) {
+    a_char(' ');
+    a_int(tmp[i]);
+    rs[tmp[i]] = ST_DPST_F;
+  }
+  a_char('\n');
+  assign_count++;
+  lcF = false;
+}
+
+void scheduleLocal(double ts) {
+  int cnt = 0;
+  for (int r = 0; r <= maxR; r++)
+    if (rs[r] == ST_DPST_E)
+      tmp[cnt++] = r;
+  if (cnt > 0) {
+    emitDPost(cnt);
+    return;
+  }
+
+  int bestRid = -1;
+  double bestAge = -1;
+  for (int r = 0; r <= maxR; r++) {
+    if (rs[r] == ST_PPST_E) {
+      double age = ts - rat[r];
+      if (age > bestAge) {
+        bestAge = age;
+        bestRid = r;
+      }
+    }
+  }
+  if (bestRid >= 0) {
+    emitPPost(bestRid);
+    return;
+  }
+
+  cnt = 0;
+  for (int r = 0; r <= maxR; r++)
+    if (rs[r] == ST_OUT_R)
+      tmp[cnt++] = r;
+  if (cnt > 0) {
+    for (int i = 0; i < cnt - 1; i++) {
+      int minIdx = i;
+      for (int j = i + 1; j < cnt; j++) {
+        if (rrt[tmp[j]] < rrt[tmp[minIdx]])
+          minIdx = j;
+      }
+      if (minIdx != i)
+        swap(tmp[i], tmp[minIdx]);
+    }
+    int gs = chooseDPreGroup(cnt, ts);
+    emitDPre(gs);
+    return;
+  }
+
+  bestRid = -1;
+  bestAge = -1;
+  for (int r = 0; r <= maxR; r++) {
+    if (rs[r] == ST_PPRE_E) {
+      double age = ts - rat[r];
+      if (age > bestAge) {
+        bestAge = age;
+        bestRid = r;
+      }
+    }
+  }
+  if (bestRid >= 0) {
+    emitPPre(selectRemote(), bestRid);
+  }
+}
+
+void scheduleRemote(int k, double ts) {
+  int cnt = 0;
+  for (int r = 0; r <= maxR; r++) {
+    if (rs[r] == ST_DPRC_E && rrm[r] == k)
+      tmp[cnt++] = r;
+  }
+  if (cnt > 0) {
+    emitDProc(k, cnt);
+    return;
+  }
+
+  for (int r = 0; r <= maxR; r++) {
+    if (rs[r] == ST_PPRC_E && rrm[r] == k) {
+      emitPProc(k, r);
+      return;
+    }
+  }
+}
+
+void schedule(double ts) {
+  abuf_pos = 0;
+  assign_count = 0;
+
+  if (lcF)
+    scheduleLocal(ts);
+  for (int k = 0; k < K; k++)
+    if (rcF[k])
+      scheduleRemote(k, ts);
+
+  write_int(assign_count);
+  write_char('\n');
+  for (int i = 0; i < abuf_pos; i++)
+    write_char(abuf[i]);
+  flush_out();
+}
 
 int main() {
-    ios_base::sync_with_stdio(false);
-    cin.tie(NULL);
+  K = next_int();
+  S = next_double();
+  LAT = next_double();
+  BW = next_double();
+  BPT = next_int();
+  NL = next_int();
+  SLO1 = next_double();
+  SLO2 = next_double();
+  TPUB = next_double();
+  TPB = next_double();
+  DSTB = next_double();
+  WTP = next_double();
+  WC = next_double();
 
-    string line;
-    if (!getline(cin, line)) return 0;
-    stringstream ss1(line);
-    int K;
-    double S, latency_in_ms, bandwidth_gbps, bytes_per_token;
-    int num_layers;
-    ss1 >> K >> S >> latency_in_ms >> bandwidth_gbps >> bytes_per_token >> num_layers;
+  build_task_table();
 
-    if (!getline(cin, line)) return 0;
-    stringstream ss2(line);
-    double SLO1, SLO2, tp_ub, tp_base, dist_base, w_tp, w_c;
-    ss2 >> SLO1 >> SLO2 >> tp_ub >> tp_base >> dist_base >> w_tp >> w_c;
+  lcF = true;
+  for (int i = 0; i < K; i++) {
+    rcF[i] = true;
+    rcL[i] = 0;
+  }
+  memset(rs, 0, sizeof(rs));
 
-    if (!getline(cin, line)) return 0;
-    stringstream ss3(line);
-    int N;
-    ss3 >> N;
+  while (read_token()) {
+    if (token_len == 3 && token[0] == 'E' && token[1] == 'N' && token[2] == 'D')
+      break;
+    double ts = parse_double();
+    int ne = next_int();
+    fnR.clear();
 
-    vector<vector<double>> task_table(N);
-    for (int i = 0; i < N; ++i) {
-        getline(cin, line);
-        stringstream ss(line);
-        double val;
-        while (ss >> val) {
-            task_table[i].push_back(val);
-        }
+    for (int ev = 0; ev < ne; ev++) {
+      read_token();
+      if (token[0] == 'A') {
+        int rid = next_int();
+        int lin = next_int();
+        if (rid > maxR)
+          maxR = rid;
+        rs[rid] = ST_PPRE_E;
+        rln[rid] = lin;
+        rrm[rid] = -1;
+        rnp[rid] = 0;
+        rat[rid] = ts;
+        rrt[rid] = ts;
+        roi[rid] = 0;
+      } else if (token[0] == 'T') {
+        processTDN(ts);
+      } else if (token[0] == 'X') {
+        processXDN();
+      } else {
+        fnR.push_back(next_int());
+      }
     }
 
-    unordered_map<int, RequestState> request_state;
-    unordered_map<int, double> request_arrival_time;
-    unordered_map<int, int> output_iter;
-
-    vector<bool> computer_free(K, true);
-    vector<int> computer_request_count(K, 0);
-    bool local_free = true;
-
-    unordered_set<int> input_up_ready;
-    unordered_set<int> input_down_ready;
-    unordered_set<pair<int, int>, pair_hash> output_up_ready;
-    unordered_set<pair<int, int>, pair_hash> output_down_ready;
-
-    MinHeap p_pre_heap;
-    vector<MinHeap> p_proc_heaps(K);
-    vector<MinHeap> d_pre_heaps(K);
-    vector<MinHeap> d_proc_heaps(K);
-    MinHeap d_pre_global;
-    MinHeap d_post_heap;
-
-    auto valid = [&](int rid, const string& stage) {
-        auto it = request_state.find(rid);
-        return it != request_state.end() && it->second.stage == stage;
-    };
-
-    auto clean_heap = [&](MinHeap& heap, const string& stage) {
-        while (!heap.empty()) {
-            int rid = heap.top();
-            if (valid(rid, stage)) {
-                break;
-            }
-            heap.pop();
-        }
-    };
-
-    auto peek_valid = [&](MinHeap& heap, const string& stage, int limit) {
-        vector<int> result;
-        while (!heap.empty() && result.size() < (size_t)limit) {
-            int rid = heap.top();
-            heap.pop();
-            if (valid(rid, stage)) {
-                result.push_back(rid);
-            }
-        }
-        for (int rid : result) {
-            heap.push(rid);
-        }
-        return result;
-    };
-
-    auto add_p_proc = [&](int rid) {
-        auto it = request_state.find(rid);
-        if (it != request_state.end() && it->second.stage == "P_PROC") {
-            p_proc_heaps[it->second.c].push(rid);
-        }
-    };
-
-    auto add_d_pre = [&](int rid) {
-        auto it = request_state.find(rid);
-        if (it != request_state.end() && it->second.stage == "D_PRE") {
-            int c = it->second.c;
-            if (c >= 0 && c < K) d_pre_heaps[c].push(rid);
-            d_pre_global.push(rid);
-        }
-    };
-
-    auto add_d_proc = [&](int rid) {
-        auto it = request_state.find(rid);
-        if (it != request_state.end() && it->second.stage == "D_PROC_W") {
-            int c = it->second.c;
-            if (output_up_ready.count({rid, output_iter[rid]})) {
-                if (c >= 0 && c < K) d_proc_heaps[c].push(rid);
-            }
-        }
-    };
-
-    auto add_d_post = [&](int rid) {
-        auto it = request_state.find(rid);
-        if (it != request_state.end() && it->second.stage == "D_POST_W") {
-            if (output_down_ready.count({rid, output_iter[rid]})) {
-                d_post_heap.push(rid);
-            }
-        }
-    };
-
-    while (true) {
-        if (!getline(cin, line)) break;
-        
-        // Trim whitespace/carriage returns
-        size_t end = line.find_last_not_of(" \r\n\t");
-        if (end != string::npos) {
-            line = line.substr(0, end + 1);
-        } else {
-            line = "";
-        }
-
-        if (line.empty()) continue; // skip blank lines if any, to match strip() behavior when robust
-        if (line == "END") break;
-
-        double timestamp = stod(line);
-        
-        if (!getline(cin, line)) break;
-        stringstream ss_num(line);
-        int num_events;
-        ss_num >> num_events;
-
-
-        unordered_set<int> assigned_this_frame;
-
-        for (int i = 0; i < num_events; ++i) {
-            getline(cin, line);
-            stringstream ss(line);
-            string event_type;
-            ss >> event_type;
-
-            if (event_type == "ARR") {
-                int rid, Lin;
-                ss >> rid >> Lin;
-                request_state[rid] = {"P_PRE", -1, Lin};
-                request_arrival_time[rid] = timestamp;
-                output_iter[rid] = 0;
-                p_pre_heap.push(rid);
-            } else if (event_type == "TDN") {
-                string server;
-                ss >> server;
-                if (server == "E") {
-                    local_free = true;
-                } else {
-                    try {
-                        int comp_id;
-                        if (server[0] == 'C') {
-                            comp_id = stoi(server.substr(1));
-                        } else {
-                            comp_id = stoi(server);
-                        }
-                        if (comp_id >= 0 && comp_id < K) {
-                            computer_free[comp_id] = true;
-                        }
-                    } catch (...) {}
-                }
-            } else if (event_type == "XDN") {
-                string direction;
-                ss >> direction;
-                
-                vector<string> tokens;
-                string t;
-                while (ss >> t) {
-                    tokens.push_back(t);
-                }
-                
-                if (tokens.size() < 5) continue;
-                
-                string phase = tokens[2];
-                vector<int> rids;
-                for (size_t j = 4; j < tokens.size(); ++j) {
-                    rids.push_back(stoi(tokens[j]));
-                }
-
-                if (direction == "UP") {
-                    if (phase == "PRE") {
-                        for (int rid : rids) {
-                            input_up_ready.insert(rid);
-                            add_p_proc(rid);
-                        }
-                    } else if (phase == "DEC") {
-                        for (int rid : rids) {
-                            output_up_ready.insert({rid, output_iter[rid]});
-                            add_d_proc(rid);
-                        }
-                    }
-                } else if (direction == "DOWN") {
-                    if (phase == "PRE") {
-                        for (int rid : rids) {
-                            input_down_ready.insert(rid);
-                        }
-                    } else if (phase == "DEC") {
-                        for (int rid : rids) {
-                            output_down_ready.insert({rid, output_iter[rid]});
-                            add_d_post(rid);
-                        }
-                    }
-                }
-            } else if (event_type == "FIN") {
-                int rid;
-                ss >> rid;
-                auto it = request_state.find(rid);
-                if (it != request_state.end()) {
-                    int c = it->second.c;
-                    if (c >= 0 && c < K) {
-                        computer_request_count[c]--;
-                    }
-                    request_state.erase(it);
-                }
-                output_iter.erase(rid);
-                request_arrival_time.erase(rid);
-            }
-        }
-
-        vector<string> assignments;
-
-        // 1. D POST (highest priority for local)
-        if (local_free) {
-            clean_heap(d_post_heap, "D_POST_W");
-            if (!d_post_heap.empty()) {
-                vector<int> batch;
-                while (!d_post_heap.empty() && batch.size() < 64) {
-                    int rid = d_post_heap.top();
-                    d_post_heap.pop();
-                    auto it = request_state.find(rid);
-                    if (it != request_state.end() && it->second.stage == "D_POST_W" && output_down_ready.count({rid, output_iter[rid]})) {
-                        batch.push_back(rid);
-                    }
-                }
-                if (!batch.empty()) {
-                    string assign = "E D POST -1 " + to_string(batch.size());
-                    for (int rid : batch) assign += " " + to_string(rid);
-                    assignments.push_back(assign);
-                    
-                    for (int rid : batch) {
-                        auto it = request_state.find(rid);
-                        if (it != request_state.end()) {
-                            output_iter[rid]++;
-                            it->second.stage = "D_PRE";
-                            assigned_this_frame.insert(rid);
-                            add_d_pre(rid);
-                        }
-                    }
-                    local_free = false;
-                }
-            }
-        }
-
-        // 2. D PRE (second priority for local)
-        if (local_free) {
-            vector<int> best_group;
-            double best_score = -1;
-
-            for (int c = 0; c < K; ++c) {
-                vector<int> candidates = peek_valid(d_pre_heaps[c], "D_PRE", 64);
-                if (candidates.empty()) continue;
-                
-                int max_group = min(64, (int)candidates.size());
-                
-                for (int group_size = 1; group_size <= max_group; ++group_size) {
-                    vector<int> group(candidates.begin(), candidates.begin() + group_size);
-                    double min_arr = request_arrival_time[group[0]];
-                    double max_arr = min_arr;
-                    for (int rid : group) {
-                        min_arr = min(min_arr, request_arrival_time[rid]);
-                        max_arr = max(max_arr, request_arrival_time[rid]);
-                    }
-                    
-                    double time_variance = group.empty() ? 0 : (max_arr - min_arr);
-                    double spatial_bonus = group_size * 10;
-                    double temporal_score = (time_variance < 100) ? -time_variance : -time_variance * 10;
-                    double total_score = spatial_bonus + temporal_score;
-                    
-                    if (total_score > best_score) {
-                        best_score = total_score;
-                        best_group = group;
-                    }
-                }
-            }
-
-            if (best_group.size() < 2) {
-                best_group = peek_valid(d_pre_global, "D_PRE", 64);
-            }
-
-            if (!best_group.empty()) {
-                string assign = "E D PRE -1 " + to_string(best_group.size());
-                for (int rid : best_group) assign += " " + to_string(rid);
-                assignments.push_back(assign);
-                
-                for (int rid : best_group) {
-                    auto it = request_state.find(rid);
-                    if (it != request_state.end() && it->second.stage == "D_PRE") {
-                        it->second.stage = "D_PROC_W";
-                        assigned_this_frame.insert(rid);
-                        add_d_proc(rid);
-                    }
-                }
-                local_free = false;
-            }
-        }
-
-        // 3. P POST (third priority for local)
-        if (local_free) {
-            int best_rid = -1;
-            for (const auto& kv : request_state) {
-                int rid = kv.first;
-                const auto& state = kv.second;
-                if (!assigned_this_frame.count(rid) && state.stage == "P_POST" && input_down_ready.count(rid)) {
-                    if (best_rid == -1 || rid < best_rid) {
-                        best_rid = rid;
-                    }
-                }
-            }
-            if (best_rid != -1) {
-                int rid = best_rid;
-                auto& state = request_state[rid];
-                assignments.push_back("E P POST " + to_string(state.c) + " " + to_string(rid));
-                state.stage = "D_PRE";
-                local_free = false;
-                assigned_this_frame.insert(rid);
-                add_d_pre(rid);
-            }
-        }
-
-        // 4. P PRE (lowest priority for local)
-        if (local_free && !p_pre_heap.empty() && K > 0) {
-            clean_heap(p_pre_heap, "P_PRE");
-            if (!p_pre_heap.empty()) {
-                int rid = p_pre_heap.top();
-                p_pre_heap.pop();
-                
-                auto it = request_state.find(rid);
-                if (it != request_state.end() && it->second.stage == "P_PRE") {
-                    int min_load = computer_request_count[0];
-                    for (int comp = 1; comp < K; ++comp) {
-                        if (computer_request_count[comp] < min_load) {
-                            min_load = computer_request_count[comp];
-                        }
-                    }
-                    
-                    int c = -1;
-                    for (int comp = 0; comp < K; ++comp) {
-                        if (computer_free[comp] && computer_request_count[comp] == min_load) {
-                            c = comp;
-                            break;
-                        }
-                    }
-                    if (c == -1) {
-                        for (int comp = 0; comp < K; ++comp) {
-                            if (computer_request_count[comp] == min_load) {
-                                c = comp;
-                                break;
-                            }
-                        }
-                    }
-                    if (c == -1) c = 0;
-                    
-                    assignments.push_back("E P PRE " + to_string(c) + " " + to_string(rid));
-                    it->second.stage = "P_PROC";
-                    it->second.c = c;
-                    
-                    computer_request_count[c]++;
-                    local_free = false;
-                    assigned_this_frame.insert(rid);
-                    
-                    if (input_up_ready.count(rid)) {
-                        p_proc_heaps[c].push(rid);
-                    }
-                }
-            }
-        }
-
-        // Remote tasks
-        for (int c = 0; c < K; ++c) {
-            if (!computer_free[c]) continue;
-            
-            clean_heap(p_proc_heaps[c], "P_PROC");
-            if (p_proc_heaps[c].empty()) continue;
-            
-            int rid = p_proc_heaps[c].top();
-            p_proc_heaps[c].pop();
-            
-            auto it = request_state.find(rid);
-            if (it == request_state.end() || it->second.stage != "P_PROC") continue;
-            
-            assignments.push_back("C" + to_string(c) + " P PROC 0 " + to_string(num_layers) + " " + to_string(c) + " " + to_string(rid));
-            
-            computer_free[c] = false;
-            it->second.stage = "P_POST";
-            assigned_this_frame.insert(rid);
-        }
-
-        for (int c = 0; c < K; ++c) {
-            if (!computer_free[c]) continue;
-            
-            clean_heap(d_proc_heaps[c], "D_PROC_W");
-            if (d_proc_heaps[c].empty()) continue;
-            
-            vector<int> batch;
-            while (!d_proc_heaps[c].empty() && batch.size() < 64) {
-                int rid = d_proc_heaps[c].top();
-                d_proc_heaps[c].pop();
-                auto it = request_state.find(rid);
-                if (it != request_state.end() && it->second.stage == "D_PROC_W" && output_up_ready.count({rid, output_iter[rid]})) {
-                    batch.push_back(rid);
-                }
-            }
-            if (batch.empty()) continue;
-            
-            string assign = "C" + to_string(c) + " D PROC " + to_string(c) + " " + to_string(batch.size());
-            for (int rid : batch) assign += " " + to_string(rid);
-            assignments.push_back(assign);
-            
-            for (int rid : batch) {
-                auto it = request_state.find(rid);
-                if (it != request_state.end()) {
-                    it->second.stage = "D_POST_W";
-                    assigned_this_frame.insert(rid);
-                    add_d_post(rid);
-                }
-            }
-            computer_free[c] = false;
-        }
-
-        cout << assignments.size() << "\n";
-        for (const string& assign : assignments) {
-            cout << assign << "\n";
-        }
-        cout << flush;
+    for (int rid : fnR) {
+      if (rrm[rid] >= 0 && rrm[rid] < K)
+        rcL[rrm[rid]]--;
+      rs[rid] = ST_FIN;
     }
-
-    return 0;
+    schedule(ts);
+  }
+  return 0;
 }
